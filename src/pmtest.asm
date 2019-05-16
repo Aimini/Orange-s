@@ -42,10 +42,16 @@ LABEL_DESC_STACK:   Descriptor       0,       TopOfStack, DA_DRWA + DA_32;
 LABEL_DESC_TEST:    Descriptor 0500000h,          0ffffh, DA_DRW       ;
 ;显存描述符 显存首址                     ,                ,            ;
 LABEL_DESC_VIDEO:   Descriptor  0B8000h,          0ffffh, DA_DRW      ;
+;LDT 描述符
 LABEL_DESC_LDT:     Descriptor        0,      LDTLen - 1, DA_LDT;
+;调用们描述符
 LABEL_DESC_CODE_DEST:Descriptor       0,SegCodeDestLen -1,DA_C | DA_32;
+
 LABEL_DESC_FLAT_C:  Descriptor        0,         0fffffh, DA_CR  | DA_32     |DA_LIMIT_4K
 LABEL_DESC_FLAT_RW: Descriptor        0,         0fffffh, DA_DRW |DA_LIMIT_4K
+;                                    目标选择子，偏移，DCount,属性
+LABEL_CALL_GATE_TEST:   Gate   SelectorCodeDest,   0,     0,DA_386CGate + DA_DPL0
+
 ;GDT END
 
 GdtLen  equ  $ - LABEL_GDT      ;GDT长度
@@ -63,6 +69,9 @@ SelectorLDT             equ     LABEL_DESC_LDT    - LABEL_GDT
 SelectorCodeDest        equ     LABEL_DESC_CODE_DEST - LABEL_GDT
 SelectorFlatC		equ	LABEL_DESC_FLAT_C	- LABEL_GDT
 SelectorFlatRW		equ	LABEL_DESC_FLAT_RW	- LABEL_GDT
+
+
+SelectorCallGateTest    equ LABEL_CALL_GATE_TEST - LABEL_GDT
 ;END of section gdt
 [SECTION .ldt]
 ALIGN 32
@@ -234,6 +243,15 @@ LABEL_MEM_CHK_OK:
     mov     byte [LABEL_LDT_DESC_CODEA + 4], al
     mov     byte [LABEL_LDT_DESC_CODEA + 7], ah
 
+        ; 初始化GDT中SEGCODE调用门描述符
+    xor     eax, eax
+    mov     ax, cs
+    shl     eax, 4
+    add     eax, LABEL_SEG_CODE_DEST
+    mov     word [LABEL_DESC_CODE_DEST + 2], ax
+    shr     eax, 16
+    mov     byte [LABEL_DESC_CODE_DEST + 4], al
+    mov     byte [LABEL_DESC_CODE_DEST + 7], ah
 	;为加载 GDTR 做准备
 	xor     eax, eax
 	mov     ax, ds
@@ -319,7 +337,8 @@ LABEL_SEG_CODE32:
     mov     ax, SelectorLDT
     lldt    ax
 
-    
+    call SelectorCallGateTest:0
+    jmp  SelectorLDTCodeA:0
     call    Init8259A
 
 
@@ -331,7 +350,7 @@ LABEL_SEG_CODE32:
     call    DispStr
     add     esp, 4;因为前面push了一个szMemChkTitle所以这里要让esp往回
 
-    call    DispMemSize
+    call    DispMemSi ze
     call    PagingDemo
 
 
@@ -662,6 +681,7 @@ LABEL_CODE_A:
     mov [gs:edi],ax
 
     jmp SelectorCode16:0
+CodeALen    equ $ - LABEL_CODE_A
 ;---调用门测试用代码段
 [section .sdest]
 ALIGN 32
@@ -675,7 +695,6 @@ LABEL_SEG_CODE_DEST:
     mov [gs:edi],ax
     retf
 SegCodeDestLen  equ $ - LABEL_SEG_CODE_DEST
-CodeALen    equ $ - LABEL_SEG_CODE_DEST
 [SECTION .s16code]
 ALIGN   32
 [BITS   16]
