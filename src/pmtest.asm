@@ -34,14 +34,17 @@ LABEL_DESC_NORMAL:  Descriptor       0,           0ffffh,       DA_DRW;
 LABEL_DESC_CODE32:  Descriptor       0, SegCode32Len - 1, DA_CR + DA_32;
 ;16位代码段描述符 非一致代码段                                          ;
 LABEL_DESC_CODE16:  Descriptor       0,           0ffffh, DA_C        ;
+; 32 bit code segment RING3
+LABEL_DESC_CODE_RING3: Descriptor    0,   CodeRing3Len-1,  DA_CR + DA_32 + DA_DPL3; 
 ;
-LABEL_DESC_DATA:    Descriptor       0,      DataLen - 1, DA_DRW       ;
+LABEL_DESC_DATA:    Descriptor       0,      DataLen - 1, DA_DRW        ;
 ;                                     ,                 ,             ;
 LABEL_DESC_STACK:   Descriptor       0,       TopOfStack, DA_DRWA + DA_32;
 ;
+LABEL_DESC_STACK_RING3:   Descriptor 0,      TopOfStack3, DA_DRWA + DA_32 + DA_DPL3;
 LABEL_DESC_TEST:    Descriptor 0500000h,          0ffffh, DA_DRW       ;
-;显存描述符 显存首址                     ,                ,            ;
-LABEL_DESC_VIDEO:   Descriptor  0B8000h,          0ffffh, DA_DRW      ;
+;显存描述符 显存首址 , set it to DPL3 for test                    ,                ,            ;
+LABEL_DESC_VIDEO:   Descriptor  0B8000h,          0ffffh, DA_DRW + DA_DPL3     ;
 ;LDT 描述符
 LABEL_DESC_LDT:     Descriptor        0,      LDTLen - 1, DA_LDT;
 ;调用们描述符
@@ -61,8 +64,10 @@ GdtPtr	dw      GdtLen - 1      ;GDT界限
 SelectorNormal          equ     LABEL_DESC_NORMAL - LABEL_GDT
 SelectorCode32          equ     LABEL_DESC_CODE32 - LABEL_GDT
 SelectorCode16          equ     LABEL_DESC_CODE16 - LABEL_GDT
+SelectorCodeRing3       equ     LABEL_DESC_CODE_RING3 - LABEL_GDT + SA_RPL3
 SelectorData            equ     LABEL_DESC_DATA   - LABEL_GDT
 SelectorStack           equ     LABEL_DESC_STACK  - LABEL_GDT
+SelectorStackRing3      equ     LABEL_DESC_STACK_RING3- LABEL_GDT + SA_RPL3
 SelectorTest            equ     LABEL_DESC_TEST   - LABEL_GDT
 SelectorVideo           equ     LABEL_DESC_VIDEO  - LABEL_GDT
 SelectorLDT             equ     LABEL_DESC_LDT    - LABEL_GDT
@@ -144,16 +149,22 @@ LABEL_IDT:
 IdtLen      equ     $ - LABEL_IDT
 IdtPtr      dw      IdtLen - 1  ;段界限
             dd      0           ;段基址
-;-----------------------------------------------------------------------
-;栈段
+;---------stack----------------------stack-------------------stack---------------------
+;------------ 栈段
 [SECTION .gs]
 ALIGN 32
 [BITS 32]
 LABEL_STACK:
     times 512 db 0
 TopOfStack equ $ - LABEL_STACK - 1
+;-------- ring3 栈段
+[SECTION .s3]
+ALIGN 32
+[BITS 32]
+LABEL_STACK3:
+    times 512 db 0
+TopOfStack3 equ $ - LABEL_STACK3 - 1
 ;End of stack segment
-
 [SECTION .s16]
 [BITS   16]
 LABEL_BEGIN:
@@ -187,8 +198,8 @@ LABEL_MEM_CHK_OK:
     ;初始化 16 位代码段描述符
     mov     ax, cs
     movzx   eax, ax
-    shl     eax, 4
-    add     eax, LABEL_SEG_CODE16
+    shl     eax, 4 ;eax = cs * 16
+    add     eax, LABEL_SEG_CODE16 ; eax = cs * 16 + offset
     mov     word [LABEL_DESC_CODE16 + 2],ax
     shr     eax, 16
 	mov     byte [LABEL_DESC_CODE16 + 4], al
@@ -212,7 +223,15 @@ LABEL_MEM_CHK_OK:
     shr     eax, 16
     mov     byte [LABEL_DESC_DATA + 4], al
     mov     byte [LABEL_DESC_DATA + 7], ah
-
+	;初始化32位Ring3代码段描述符 
+	xor     eax, eax
+	mov     ax, cs      
+	shl     eax, 4
+	add     eax, LABEL_CODE_RING3;将段基址复制,段界限和段属性已在17行声明
+	mov     word [LABEL_DESC_CODE_RING3 + 2], ax;就是这里,忘了写 +2 结果又浪费了半天时间,今天就到这吧 2017年3月14日 21:11:24
+	shr     eax, 16
+	mov     byte [LABEL_DESC_CODE_RING3 + 4], al
+	mov     byte [LABEL_DESC_CODE_RING3 + 7], ah
     ; 初始化栈描述符
     xor     eax, eax
     mov     ax, ds
@@ -222,6 +241,15 @@ LABEL_MEM_CHK_OK:
     shr     eax, 16
     mov     byte [LABEL_DESC_STACK + 4], al
     mov     byte [LABEL_DESC_STACK + 7], ah
+   ; 初始化RING3栈描述符
+    xor     eax, eax
+    mov     ax, ds
+    shl     eax, 4
+    add     eax, LABEL_STACK3
+    mov     word [LABEL_DESC_STACK_RING3 + 2], ax
+    shr     eax, 16
+    mov     byte [LABEL_DESC_STACK_RING3 + 4], al
+    mov     byte [LABEL_DESC_STACK_RING3 + 7], ah
 
     ; 初始化LDT描述符
     xor     eax, eax
@@ -239,7 +267,7 @@ LABEL_MEM_CHK_OK:
     shl     eax, 4
     add     eax, LABEL_CODE_A
     mov     word [LABEL_LDT_DESC_CODEA + 2], ax
-    shr     eax, 16
+        shr     eax, 16
     mov     byte [LABEL_LDT_DESC_CODEA + 4], al
     mov     byte [LABEL_LDT_DESC_CODEA + 7], ah
 
@@ -339,7 +367,7 @@ LABEL_SEG_CODE32:
 
     call SelectorCallGateTest:0
     jmp  SelectorLDTCodeA:0
-    call    Init8259A
+    call Init8259A
 
 
     push    szPMMessage
@@ -350,7 +378,7 @@ LABEL_SEG_CODE32:
     call    DispStr
     add     esp, 4;因为前面push了一个szMemChkTitle所以这里要让esp往回
 
-    call    DispMemSi ze
+    call    DispMemSize
     call    PagingDemo
 
 
@@ -668,6 +696,19 @@ DispMemSize:
 
     %include "lib.inc"
 SegCode32Len    equ $ - LABEL_SEG_CODE32
+[SECTION .ring3]
+ALIGN 32
+[BITS 32]
+LABEL_CODE_RING3:
+    mov ax, SelectorVideo
+    mov gs,ax
+    mov edi,(80*12 + 4) *2 ;第12行第4列
+    mov ah, 0Ch
+    mov al, '3'
+    mov [gs:edi],ax
+
+    jmp $
+CodeRing3Len    equ $ - LABEL_CODE_RING3
 ;-------------LDT测试用代码段
 [SECTION .la]
 ALIGN 32
@@ -687,13 +728,20 @@ CodeALen    equ $ - LABEL_CODE_A
 ALIGN 32
 [bits 32]
 LABEL_SEG_CODE_DEST:
+    ;打印字符 C
     mov ax, SelectorVideo
     mov gs,ax
     mov edi,(80*12 + 1) *2 ;第12行第0列
     mov ah,0Ch
     mov al,'C'
     mov [gs:edi],ax
-    retf
+
+    	
+	push SelectorStackRing3
+	push TopOfStack3
+	push SelectorCodeRing3
+	push 0
+    retf    
 SegCodeDestLen  equ $ - LABEL_SEG_CODE_DEST
 [SECTION .s16code]
 ALIGN   32
