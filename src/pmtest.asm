@@ -49,7 +49,8 @@ LABEL_DESC_VIDEO:   Descriptor  0B8000h,          0ffffh, DA_DRW + DA_DPL3     ;
 LABEL_DESC_LDT:     Descriptor        0,      LDTLen - 1, DA_LDT;
 ;调用们描述符
 LABEL_DESC_CODE_DEST:Descriptor       0,SegCodeDestLen -1,DA_C | DA_32;
-
+LABEL_DESC_PAGE_DIR: Descriptor PageDirBase0,             4095,DA_DRW;
+LABEL_DESC_PAGE_TBL: Descriptor     PageTblBase0,         4096*8 - 1,DA_DRW;
 LABEL_DESC_FLAT_C:  Descriptor        0,         0fffffh, DA_CR  | DA_32     |DA_LIMIT_4K
 LABEL_DESC_FLAT_RW: Descriptor        0,         0fffffh, DA_DRW |DA_LIMIT_4K
 ;                                    目标选择子，偏移，DCount,属性
@@ -224,14 +225,14 @@ LABEL_BEGIN:
 
     ; 得到内存数
     mov     ebx, 0
-    mov     di, _MemChkBuf
+    mov     di, _MemChkBuf ;内存范围信息将被存入 [es:di]中
 .loop:
     mov     eax, 0E820H ;获取内存信息的magic number
     mov     ecx, 20
     mov     edx, 0534D4150h ;
     int     15h
     jc      LABEL_MEM_CHK_FAIL;CF = 0表示没有错误
-    add     di, 20
+    add     di, 20  ;每个内存范围信息大小为20字节。
     inc     dword [_dwMCRNumber]
     cmp      ebx, 0
     jne     .loop
@@ -422,14 +423,19 @@ LABEL_SEG_CODE32:
 
     mov     ax, SelectorTSS
     ltr     ax
-
+    push    szMemChkTitle;非cpu设定代码,放在cpu设定代码后
+    call    DispStr
+    add     esp, 4;因为前面push了一个szMemChkTitle所以这里要让esp往回
+    call    DispMemSize
+    
+    call	SetupPaging
     push SelectorStackRing3 ;vb 0x58:0x13
 	push TopOfStack3
 	push SelectorCodeRing3
 	push 0
     retf
 
-    ; call SelectorCallGateTest:0
+    call SelectorCallGateTest:0
     call Init8259A
 
 
@@ -437,11 +443,9 @@ LABEL_SEG_CODE32:
     call    DispStr
     add     esp, 4;
 
-    push    szMemChkTitle;非cpu设定代码,放在cpu设定代码后
-    call    DispStr
-    add     esp, 4;因为前面push了一个szMemChkTitle所以这里要让esp往回
 
-    call    DispMemSize
+
+
     call    PagingDemo
 
 
@@ -550,7 +554,7 @@ SetupPaging:
     ;根据内存上限计算应该初始化多少页表
     xor     edx, edx
     mov     eax, [dwMemSize]
-    mov     ebx, 400000h    ;一个页表有1k个表项,一个页表管理4k字节的内存->一个页目录管理的内存大小为 1k * 4k = 4M
+    mov     ebx, 0400000h    ;一个PDE指向1k个PTE,一个页PTE指向一块4k字节的内存->一个PTE的内存大小为 1k * 4k = 4M
     div     ebx             ;默认的被除数为EAX, 一般除以EBX(ECX), 结果是:商放在EAX中,余数放在EDX中
     mov     ecx, eax    ;页表数
     test	edx, edx    ;edx余数
@@ -566,7 +570,7 @@ SetupPaging:
     mov     eax, PageTblBase0 | PG_P | PG_USU | PG_RWW
 .1:
     stosd       ;mov [es:edi],eax 若设置了EFLAGS中的方向位置位(即在STOSL指令前使用STD指令)则EDI自减4,否则(使用CLD指令)EDI自增4
-    add     eax, 4096;每个页目录管理1k个页表,即每个页目录管理的页表首地址相隔4B * 1k = 4K
+    add     eax, 4096;每个PDE管理1k个页表,即每个PDE指向的页表首地址相隔4B * 1k = 4K
     loop    .1
 
     ;在初始化所有页表
@@ -719,19 +723,20 @@ DispMemSize:
     push    ecx
 
     mov     esi, MemChkBuf  ;目标为内存检查的缓存位置
-    mov     ecx, [dwMCRNumber];得到关于内存数据块的数
-.loop:
-    mov     edx, 5
-    mov     edi, ARDStruct
-.1:
-    push    dword [esi]
-    call    DispInt
-    pop     eax
-    stosd
-    add     esi, 4
-    dec     edx
-    cmp     edx, 0
-    jnz     .1
+    mov     ecx, [dwMCRNumber];得到关于内存数据块的数; 
+                            ;for(ecx = dwMCRNumber; ecx > 0; --ecx)
+.loop:                      ;{
+    mov     edx, 5          ;ARDS  5x4byte
+    mov     edi, ARDStruct  ;   uint32_t * MemChkBuf(esi),*ARDStruct(edi)
+.1:                         ;                       
+    push    dword [esi]     ;   for(esi = MemChkBuf, edx = 5; edx > 0 ; -- edx){
+    call    DispInt         ;       DispInt(*MenChkBuf)
+    pop     eax             ;  
+    stosd                   ;       *ARDStruct = *MenChkBuf , ARDStruct += 1;
+    add     esi, 4          ;       ++MemChkBuf;    
+    dec     edx             ;   }
+    cmp     edx, 0          ;
+    jnz     .1              
     call    DispReturn
     cmp     dword [dwType], 1
     jne     .2
@@ -741,7 +746,7 @@ DispMemSize:
     jb      .2
     mov     [dwMemSize], eax
 .2:
-    loop    .loop
+    loop    .loop           ;}
 
     call    DispReturn
     push    szRAMSize
