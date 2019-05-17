@@ -53,8 +53,9 @@ LABEL_DESC_CODE_DEST:Descriptor       0,SegCodeDestLen -1,DA_C | DA_32;
 LABEL_DESC_FLAT_C:  Descriptor        0,         0fffffh, DA_CR  | DA_32     |DA_LIMIT_4K
 LABEL_DESC_FLAT_RW: Descriptor        0,         0fffffh, DA_DRW |DA_LIMIT_4K
 ;                                    目标选择子，偏移，DCount,属性
-LABEL_CALL_GATE_TEST:   Gate   SelectorCodeDest,   0,     0,DA_386CGate + DA_DPL0
+LABEL_CALL_GATE_TEST:   Gate   SelectorCodeDest,   0,     0,DA_386CGate + DA_DPL3
 
+LABEL_DESC_TSS:     Descriptor        0,      TSSLen - 1,     DA_386TSS
 ;GDT END
 
 GdtLen  equ  $ - LABEL_GDT      ;GDT长度
@@ -77,6 +78,8 @@ SelectorFlatRW		equ	LABEL_DESC_FLAT_RW	- LABEL_GDT
 
 
 SelectorCallGateTest    equ LABEL_CALL_GATE_TEST - LABEL_GDT
+
+SelectorTSS equ LABEL_DESC_TSS - LABEL_GDT
 ;END of section gdt
 [SECTION .ldt]
 ALIGN 32
@@ -165,6 +168,47 @@ LABEL_STACK3:
     times 512 db 0
 TopOfStack3 equ $ - LABEL_STACK3 - 1
 ;End of stack segment
+
+
+;---------tss----------------------tss-------------------tss---------------------
+[SECTION .tss]
+ALIGN 32
+[BITS 32]
+LABEL_TSS:
+dd  0               ;上一任务链接
+dd  TopOfStack      ;0级堆栈
+dd  SelectorStack
+dd  0               ;1级堆栈
+dd  0
+dd  0               ;2级堆栈
+dd  0
+dd  0               ;CR3
+dd  0               ;EIP
+dd  0               ;EFLAGS
+dd  0               ;eax
+dd  0               ;ecx
+dd  0               ;edx
+dd  0               ;ebx
+dd  0               ;esp
+dd  0               ;ebp
+dd  0               ;esi
+dd  0               ;edi
+dd  0               ;es
+dd  0               ;cs
+dd  0               ;ss
+dd  0               ;ds
+dd  0               ;fs
+dd  0               ;gs
+dd  0               ;LDT Selector
+dw  0               ;调试陷阱标志
+dw  $ - LABEL_TSS + 2;I/O位图基址
+db	0ffh	        ;I/O位图结束标志
+TSSLen equ $ -LABEL_TSS
+
+;End of TSS
+
+
+
 [SECTION .s16]
 [BITS   16]
 LABEL_BEGIN:
@@ -280,6 +324,17 @@ LABEL_MEM_CHK_OK:
     shr     eax, 16
     mov     byte [LABEL_DESC_CODE_DEST + 4], al
     mov     byte [LABEL_DESC_CODE_DEST + 7], ah
+    ; 初始化TSS描述符
+    xor     eax, eax
+    mov     ax, cs
+    shl     eax, 4
+    add     eax, LABEL_TSS
+    mov     word [LABEL_DESC_TSS + 2], ax
+    shr     eax, 16
+    mov     byte [LABEL_DESC_TSS + 4], al
+    mov     byte [LABEL_DESC_TSS + 7], ah
+
+
 	;为加载 GDTR 做准备
 	xor     eax, eax
 	mov     ax, ds
@@ -349,7 +404,7 @@ LABEL_REAL_ENTRY:
 
 
 
-[SECTION .s32]; 32 位代码段. 由实模式跳入.
+[SECTION .s32]; 32位代码段. 由实模式跳入.
 [BITS	32]
 LABEL_SEG_CODE32:
     ;各种段寄存器初始化
@@ -365,8 +420,16 @@ LABEL_SEG_CODE32:
     mov     ax, SelectorLDT
     lldt    ax
 
-    call SelectorCallGateTest:0
-    jmp  SelectorLDTCodeA:0
+    mov     ax, SelectorTSS
+    ltr     ax
+
+    push SelectorStackRing3 ;vb 0x58:0x13
+	push TopOfStack3
+	push SelectorCodeRing3
+	push 0
+    retf
+
+    ; call SelectorCallGateTest:0
     call Init8259A
 
 
@@ -698,7 +761,7 @@ DispMemSize:
 SegCode32Len    equ $ - LABEL_SEG_CODE32
 [SECTION .ring3]
 ALIGN 32
-[BITS 32]
+[BITS 32];0x20 
 LABEL_CODE_RING3:
     mov ax, SelectorVideo
     mov gs,ax
@@ -706,6 +769,8 @@ LABEL_CODE_RING3:
     mov ah, 0Ch
     mov al, '3'
     mov [gs:edi],ax
+
+    call SelectorCallGateTest:0
 
     jmp $
 CodeRing3Len    equ $ - LABEL_CODE_RING3
@@ -735,13 +800,10 @@ LABEL_SEG_CODE_DEST:
     mov ah,0Ch
     mov al,'C'
     mov [gs:edi],ax
-
-    	
-	push SelectorStackRing3
-	push TopOfStack3
-	push SelectorCodeRing3
-	push 0
+    
+    jmp  SelectorLDTCodeA:0
     retf    
+
 SegCodeDestLen  equ $ - LABEL_SEG_CODE_DEST
 [SECTION .s16code]
 ALIGN   32
