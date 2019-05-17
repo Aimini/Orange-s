@@ -49,8 +49,6 @@ LABEL_DESC_VIDEO:   Descriptor  0B8000h,          0ffffh, DA_DRW + DA_DPL3     ;
 LABEL_DESC_LDT:     Descriptor        0,      LDTLen - 1, DA_LDT;
 ;调用们描述符
 LABEL_DESC_CODE_DEST:Descriptor       0,SegCodeDestLen -1,DA_C | DA_32;
-LABEL_DESC_PAGE_DIR: Descriptor PageDirBase0,             4095,DA_DRW;
-LABEL_DESC_PAGE_TBL: Descriptor     PageTblBase0,         4096*8 - 1,DA_DRW;
 LABEL_DESC_FLAT_C:  Descriptor        0,         0fffffh, DA_CR  | DA_32     |DA_LIMIT_4K
 LABEL_DESC_FLAT_RW: Descriptor        0,         0fffffh, DA_DRW |DA_LIMIT_4K
 ;                                    目标选择子，偏移，DCount,属性
@@ -428,7 +426,8 @@ LABEL_SEG_CODE32:
     add     esp, 4;因为前面push了一个szMemChkTitle所以这里要让esp往回
     call    DispMemSize
     
-    call	SetupPaging
+    call    PagingDemo
+
     push SelectorStackRing3 ;vb 0x58:0x13
 	push TopOfStack3
 	push SelectorCodeRing3
@@ -446,7 +445,7 @@ LABEL_SEG_CODE32:
 
 
 
-    call    PagingDemo
+ 
 
 
 	call	SetRealmode8259A
@@ -617,7 +616,7 @@ PagingDemo:
 	call	MemCpy
 	add	esp, 12
 
-    push	LenPagingDemoAll
+    push	LenPagingDemoAll ;复制PagingDemoProc的代码到指定地址 (ProcPagingDemo)
 	push	OffsetPagingDemoProc
 	push	ProcPagingDemo
 	call	MemCpy
@@ -632,7 +631,8 @@ PagingDemo:
 	call	SelectorFlatC:ProcPagingDemo
 	call	PSwitch			; 切换页目录,改变地址映射关系
 	call	SelectorFlatC:ProcPagingDemo
-
+    mov     eax,PageDirBase0
+    mov     cr3,eax
 	ret
 
 ;切换页表-----------------------------------------------------
@@ -645,13 +645,13 @@ PSwitch:
     mov     ecx, [PageTableNumber] 
 
 .1:
-    stosd
+    stosd   ;初始化第二个页目录
     add     eax, 4096
     loop    .1
 
     mov     eax,  [PageTableNumber]
     mov     ebx, 1024
-    mul     ebx
+    mul     ebx ;计算总共多少个页表项
     mov     ecx, eax
     mov     edi, PageTblBase1
     xor     eax, eax
@@ -664,15 +664,15 @@ PSwitch:
     
     mov     eax, LinearAddrDemo ;--                     ;                                   
 
-    shr     eax, 22             ;   |;
-    mov     ebx, 4096           ;   +地址按4M 其实是获得该地址所在的页表的地址;
-    mul     ebx                 ;__/;
+    shr     eax, 22             ;   |;获得该地址所在的页目录(第n项)
+    mov     ebx, 4096           ;   +
+    mul     ebx                 ;__/;获得该地址所在的页表项（包括页目录，即页目录*102）
     mov     ecx, eax
     mov     eax, LinearAddrDemo ;;获取该地址所在页表的表项的地址
-    shr     eax, 12
-    and     eax, 03FFh;获取中间10位
+    shr     eax, 12 ;除以2^12，即4k，获取其所在页表项
+    and     eax, 03FFh;只留下低10位，该地址在页表中的位置
     mov     ebx, 4;每个页表表项大小为4b
-    mul     ebx
+    mul     ebx   ;算出目标页表项相对于该表中第一项的偏移
     add     eax, ecx
     add     eax, PageTblBase1;d所得到LinearAddrDemo页表表项的地址
     mov     dword [es:eax], ProcBar | PG_P | PG_USU | PG_RWW
