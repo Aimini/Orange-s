@@ -144,10 +144,16 @@ ALIGN 32
 LABEL_IDT:
     ;重复255次
 
-    %rep    255      
+    %rep    32      
                  ; 目标段选择子,           偏移; DCount,  属性
     Gate        SelectorCode32, SuperHandler,  0   , DA_386IGate
     %endrep
+    Gate        SelectorCode32,ClockHandler, 0, DA_386IGate
+    %rep    95    
+                 ; 目标段选择子,           偏移; DCount,  属性
+    Gate        SelectorCode32, SuperHandler,  0   , DA_386IGate
+    %endrep
+    Gate        SelectorCode32,UserIntHandler, 0, DA_386IGate
 IdtLen      equ     $ - LABEL_IDT
 IdtPtr      dw      IdtLen - 1  ;段界限
             dd      0           ;段基址
@@ -418,7 +424,9 @@ LABEL_SEG_CODE32:
     mov     esp, TopOfStack
     mov     ax, SelectorLDT
     lldt    ax
-
+    call Init8259A
+    int 080h
+    jmp $
     mov     ax, SelectorTSS
     ltr     ax
     push    szMemChkTitle;非cpu设定代码,放在cpu设定代码后
@@ -428,6 +436,7 @@ LABEL_SEG_CODE32:
     
     call    PagingDemo
 
+
     push SelectorStackRing3 ;vb 0x58:0x13
 	push TopOfStack3
 	push SelectorCodeRing3
@@ -435,7 +444,7 @@ LABEL_SEG_CODE32:
     retf
 
     call SelectorCallGateTest:0
-    call Init8259A
+
 
 
     push    szPMMessage
@@ -463,12 +472,13 @@ Init8259A:
     call    io_delay
 
     out     0A0h, al        ;从 8259 ICW1
-    call    io_delay        
-    mov     al, 020h        ;0010 0|000 低三位为0表示为 80x86系统
+    call    io_delay
+
+    mov     al, 020h        ;0010 0|000 低三位为0表示为 80x86系统,IRQ0对应0x20h
     out     021h, al        ;主  8259 ICW2
     call    io_delay
 
-    mov     al, 028h        ;0010 1|000 同上
+    mov     al, 028h        ;0010 1|000，IRQ8对应0x28h, 同上
     out     0A1h, al        ;从 8259 ICW2
     call    io_delay
 
@@ -546,7 +556,21 @@ _SuperHandler:
     mov     al, '1'
 
     mov     [gs:((80 * 0 + 75) * 2)], ax
-    jmp     $;妈的智障。被自己蠢哭
+    ;jmp     $;妈的智障。被自己蠢哭
+    iretd
+
+_UserIntHandler:
+UserIntHandler equ  _UserIntHandler - $$
+    mov ah, 0Ch
+    mov al, 'I'
+    mov [gs:((80*0 + 70)*2)],ax
+    iretd
+
+_ClockHandler:
+ClockHandler equ  _ClockHandler - $$
+    inc byte [gs:((80*0 + 70)*2)]
+    mov al, 20h
+    out 20h,al  ;发送EOI
     iretd
 ;===========================分页机制初始化===================================
 SetupPaging:
