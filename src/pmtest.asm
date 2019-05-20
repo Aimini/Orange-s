@@ -11,7 +11,7 @@
 ;在程序所占用内存的前256（0100h）个字节中,DOS会为程序创建前缀（PSP）数据区。加载程序后 即 cs:ip = psp:0100h
 org     0100h
 	jmp     LABEL_BEGIN
-
+    
 [SECTION .gdt]
 PageDirBase0		equ	200000h	; 页目录开始地址:	2M
 PageTblBase0		equ	201000h	; 页表开始地址:		2M +  4K
